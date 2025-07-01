@@ -3,18 +3,53 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import os
+import time
 from scipy import stats
 
 class FeatureAnalyzer:
     def __init__(self, csv_path, name="Features"):
-        self.df = pd.read_csv(csv_path)
+        self.csv_path = csv_path
         self.name = name
-        self.numeric_cols = self.df.select_dtypes(include=[np.number]).columns.tolist()
-        # Remove ID columns from analysis
-        self.feature_cols = [col for col in self.numeric_cols if 'Id' not in col and 'nodeId' not in col]
+        self.df = None
+        self.numeric_cols = []
+        self.feature_cols = []
+        self.load_data()
+    
+    def load_data(self):
+        """Load CSV data with retry logic for containerized environment"""
+        max_retries = 10
+        for attempt in range(max_retries):
+            try:
+                if os.path.exists(self.csv_path):
+                    self.df = pd.read_csv(self.csv_path)
+                    self.numeric_cols = self.df.select_dtypes(include=[np.number]).columns.tolist()
+                    self.feature_cols = [col for col in self.numeric_cols if 'Id' not in col and 'nodeId' not in col]
+                    print(f"✅ Loaded {self.name} data: {self.df.shape}")
+                    return
+                else:
+                    print(f"⏳ Waiting for {self.csv_path} (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(5)
+            except Exception as e:
+                print(f"❌ Error loading {self.csv_path}: {e}")
+                time.sleep(5)
+        
+        # Create dummy data if file not found
+        print(f"⚠️ Could not load {self.csv_path}, creating dummy data")
+        self.df = pd.DataFrame({'nodeId': [1, 2, 3], 'dummy_feature': [0.1, 0.2, 0.3]})
+        self.numeric_cols = ['dummy_feature']
+        self.feature_cols = ['dummy_feature']
+
+    def refresh_data(self):
+        """Refresh data from CSV - useful for containerized apps"""
+        self.load_data()
+        return f"🔄 Data refreshed for {self.name}. Shape: {self.df.shape if self.df is not None else 'No data'}"
     
     def get_feature_stats(self):
         """Calculate comprehensive statistics for all features"""
+        if self.df is None or len(self.feature_cols) == 0:
+            return pd.DataFrame({"Error": ["No data available"]})
+            
         stats_df = self.df[self.feature_cols].describe().T
         
         # Add additional metrics
@@ -32,7 +67,7 @@ class FeatureAnalyzer:
     
     def create_boxplot(self, selected_features):
         """Create boxplots for selected features"""
-        if not selected_features:
+        if not selected_features or self.df is None:
             return None
             
         n_features = len(selected_features)
@@ -42,7 +77,7 @@ class FeatureAnalyzer:
             axes = [axes]
         
         for i, feature in enumerate(selected_features[:4]):  # Limit to 4 plots
-            if i < len(axes):
+            if i < len(axes) and feature in self.df.columns:
                 self.df.boxplot(column=feature, ax=axes[i])
                 axes[i].set_title(f'{feature}')
                 axes[i].tick_params(axis='x', rotation=45)
@@ -52,7 +87,7 @@ class FeatureAnalyzer:
     
     def create_distribution_plot(self, selected_features):
         """Create distribution plots for selected features"""
-        if not selected_features:
+        if not selected_features or self.df is None:
             return None
             
         n_features = len(selected_features)
@@ -62,6 +97,9 @@ class FeatureAnalyzer:
             axes = axes.reshape(-1)
         
         for i, feature in enumerate(selected_features[:4]):
+            if feature not in self.df.columns:
+                continue
+                
             row = i // 2
             col = i % 2
             
@@ -82,7 +120,7 @@ class FeatureAnalyzer:
     
     def create_correlation_heatmap(self, selected_features):
         """Create correlation heatmap for selected features"""
-        if len(selected_features) < 2:
+        if len(selected_features) < 2 or self.df is None:
             return None
             
         correlation_matrix = self.df[selected_features].corr()
@@ -96,8 +134,8 @@ class FeatureAnalyzer:
     
     def analyze_feature_quality(self, selected_features):
         """Analyze feature quality and provide recommendations"""
-        if not selected_features:
-            return "Please select features to analyze."
+        if not selected_features or self.df is None:
+            return "Please select features to analyze or check if data is loaded."
         
         analysis = []
         stats_df = self.get_feature_stats()
@@ -161,30 +199,50 @@ class FeatureAnalyzer:
         return "\n".join(analysis)
 
 
-def create_gradio_dashboard(csv_files):
-    """Create Gradio dashboard for multiple CSV files"""
-    analyzers = {}
+def create_gradio_app():
+    """Create standalone Gradio app for analyzing CSV files"""
     
-    for csv_file in csv_files:
-        if 'structural' in csv_file.lower():
-            analyzers['structural'] = FeatureAnalyzer(csv_file, name="Structural")
-        elif 'community' in csv_file.lower():
-            analyzers['community'] = FeatureAnalyzer(csv_file, name="Community")
+    # Define CSV paths for containerized environment
+    csv_dir = '/csv_output'
+    structural_path = f'{csv_dir}/structural_features.csv'
+    community_path = f'{csv_dir}/community_features.csv'
+    
+    # Initialize analyzers
+    structural_analyzer = FeatureAnalyzer(structural_path, name="Structural")
+    community_analyzer = FeatureAnalyzer(community_path, name="Community")
     
     with gr.Blocks(title="Pest Analysis Feature Dashboard") as demo:
         gr.Markdown("# 📊 Pest Data Feature Analysis Dashboard")
+        gr.Markdown("*Monitoring for CSV files from main analysis...*")
         
-        if 'structural' in analyzers:
-            with gr.Tab("🏗️ Structural Features"):
-                _create_analysis_tab(analyzers['structural'])
+        with gr.Tab("🏗️ Structural Features"):
+            # Add refresh button
+            with gr.Row():
+                refresh_struct_btn = gr.Button("🔄 Refresh Data")
+                refresh_struct_output = gr.Textbox(label="Status", interactive=False)
+            
+            refresh_struct_btn.click(
+                structural_analyzer.refresh_data, 
+                outputs=refresh_struct_output
+            )
+            
+            _create_analysis_tab(structural_analyzer)
         
-        if 'community' in analyzers:
-            with gr.Tab("🏘️ Community Features"):
-                _create_analysis_tab(analyzers['community'])
+        with gr.Tab("🏘️ Community Features"):
+            # Add refresh button
+            with gr.Row():
+                refresh_comm_btn = gr.Button("🔄 Refresh Data")
+                refresh_comm_output = gr.Textbox(label="Status", interactive=False)
+            
+            refresh_comm_btn.click(
+                community_analyzer.refresh_data, 
+                outputs=refresh_comm_output
+            )
+            
+            _create_analysis_tab(community_analyzer)
         
-        if len(analyzers) > 1:
-            with gr.Tab("🔀 Combined Analysis"):
-                _create_combined_analysis_tab(analyzers.get('structural'), analyzers.get('community'))
+        with gr.Tab("🔀 Combined Analysis"):
+            _create_combined_analysis_tab(structural_analyzer, community_analyzer)
     
     return demo
 
@@ -200,7 +258,7 @@ def _create_analysis_tab(analyzer):
         feature_selector = gr.CheckboxGroup(
             choices=analyzer.feature_cols,
             label="Select Features (max 4)",
-            value=analyzer.feature_cols[:4]
+            value=analyzer.feature_cols[:4] if analyzer.feature_cols else []
         )
         
         with gr.Row():
@@ -218,7 +276,7 @@ def _create_analysis_tab(analyzer):
         quality_selector = gr.CheckboxGroup(
             choices=analyzer.feature_cols,
             label="Select Features to Assess",
-            value=analyzer.feature_cols[:10]
+            value=analyzer.feature_cols[:10] if analyzer.feature_cols else []
         )
         quality_btn = gr.Button("Analyze Feature Quality")
         quality_output = gr.Markdown()
@@ -227,27 +285,23 @@ def _create_analysis_tab(analyzer):
 
 def _create_combined_analysis_tab(analyzer1, analyzer2):
     """Create tab for comparing structural vs community features"""
-    if not analyzer1 or not analyzer2:
-        gr.Markdown("Combined analysis requires both structural and community features.")
-        return
-    
     gr.Markdown("## 🔀 Compare Structural vs Community Features")
     
     with gr.Row():
         with gr.Column():
             gr.Markdown("### Structural Features")
             struct_selector = gr.CheckboxGroup(
-                choices=analyzer1.feature_cols[:5],
+                choices=analyzer1.feature_cols[:5] if analyzer1.feature_cols else [],
                 label="Select Structural Features",
-                value=analyzer1.feature_cols[:3]
+                value=analyzer1.feature_cols[:3] if analyzer1.feature_cols else []
             )
         
         with gr.Column():
             gr.Markdown("### Community Features") 
             comm_selector = gr.CheckboxGroup(
-                choices=analyzer2.feature_cols[:5],
+                choices=analyzer2.feature_cols[:5] if analyzer2.feature_cols else [],
                 label="Select Community Features",
-                value=analyzer2.feature_cols[:3]
+                value=analyzer2.feature_cols[:3] if analyzer2.feature_cols else []
             )
     
     compare_btn = gr.Button("Compare Feature Quality")
@@ -269,3 +323,14 @@ def _create_combined_analysis_tab(analyzer1, analyzer2):
         return result
     
     compare_btn.click(compare_features, inputs=[struct_selector, comm_selector], outputs=compare_output)
+
+
+if __name__ == "__main__":
+    print("🚀 Starting Feature Analyzer App...")
+    print("📂 Looking for CSV files in /csv_output/")
+    
+    # Ensure output directory exists
+    os.makedirs('/csv_output', exist_ok=True)
+    
+    demo = create_gradio_app()
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
