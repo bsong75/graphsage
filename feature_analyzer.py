@@ -199,130 +199,125 @@ class FeatureAnalyzer:
         return "\n".join(analysis)
 
 
-def create_gradio_app():
-    """Create standalone Gradio app for analyzing CSV files"""
+class GradioApp:
+    def __init__(self, csv_dir='/csv_output'):
+        self.csv_dir = csv_dir
+        self.structural_analyzer = FeatureAnalyzer(f'{csv_dir}/structural_features.csv', name="Structural")
+        self.community_analyzer = FeatureAnalyzer(f'{csv_dir}/community_features.csv', name="Community")
     
-    # Define CSV paths for containerized environment
-    csv_dir = '/csv_output'
-    structural_path = f'{csv_dir}/structural_features.csv'
-    community_path = f'{csv_dir}/community_features.csv'
-    
-    # Initialize analyzers
-    structural_analyzer = FeatureAnalyzer(structural_path, name="Structural")
-    community_analyzer = FeatureAnalyzer(community_path, name="Community")
-    
-    with gr.Blocks(title="Pest Analysis Feature Dashboard") as demo:
-        gr.Markdown("# 📊 Pest Data Feature Analysis Dashboard")
-        gr.Markdown("*Monitoring for CSV files from main analysis...*")
-        
-        with gr.Tab("🏗️ Structural Features"):
-            # Add refresh button
-            with gr.Row():
-                refresh_struct_btn = gr.Button("🔄 Refresh Data")
-                refresh_struct_output = gr.Textbox(label="Status", interactive=False)
+    def create_gradio_app(self):
+        """Create standalone Gradio app for analyzing CSV files"""
+        with gr.Blocks(title="Pest Analysis Feature Dashboard") as demo:
+            gr.Markdown("# 📊 Pest Data Feature Analysis Dashboard")
+            gr.Markdown("*Monitoring for CSV files from main analysis...*")
             
-            refresh_struct_btn.click(
-                structural_analyzer.refresh_data, 
-                outputs=refresh_struct_output
+            with gr.Tab("🏗️ Structural Features"):
+                # Add refresh button
+                with gr.Row():
+                    refresh_struct_btn = gr.Button("🔄 Refresh Data")
+                    refresh_struct_output = gr.Textbox(label="Status", interactive=False)
+                
+                refresh_struct_btn.click(
+                    self.structural_analyzer.refresh_data, 
+                    outputs=refresh_struct_output
+                )
+                
+                self._create_analysis_tab(self.structural_analyzer)
+            
+            with gr.Tab("🏘️ Community Features"):
+                # Add refresh button
+                with gr.Row():
+                    refresh_comm_btn = gr.Button("🔄 Refresh Data")
+                    refresh_comm_output = gr.Textbox(label="Status", interactive=False)
+                
+                refresh_comm_btn.click(
+                    self.community_analyzer.refresh_data, 
+                    outputs=refresh_comm_output
+                )
+                
+                self._create_analysis_tab(self.community_analyzer)
+            
+            with gr.Tab("🔀 Combined Analysis"):
+                self._create_combined_analysis_tab()
+        
+        return demo
+    
+    def _create_analysis_tab(self, analyzer):
+        """Create analysis tab for a specific feature type"""
+        with gr.Tab("📈 Statistics"):
+            stats_btn = gr.Button(f"Get {analyzer.name} Statistics")
+            stats_output = gr.Dataframe()
+            stats_btn.click(analyzer.get_feature_stats, outputs=stats_output)
+        
+        with gr.Tab("📦 Distributions"):
+            feature_selector = gr.CheckboxGroup(
+                choices=analyzer.feature_cols,
+                label="Select Features (max 4)",
+                value=analyzer.feature_cols[:4] if analyzer.feature_cols else []
             )
             
-            _create_analysis_tab(structural_analyzer)
-        
-        with gr.Tab("🏘️ Community Features"):
-            # Add refresh button
             with gr.Row():
-                refresh_comm_btn = gr.Button("🔄 Refresh Data")
-                refresh_comm_output = gr.Textbox(label="Status", interactive=False)
+                boxplot_btn = gr.Button("Generate Boxplots")
+                dist_btn = gr.Button("Generate Distribution Plots")
             
-            refresh_comm_btn.click(
-                community_analyzer.refresh_data, 
-                outputs=refresh_comm_output
-            )
+            with gr.Row():
+                boxplot_output = gr.Plot()
+                dist_output = gr.Plot()
             
-            _create_analysis_tab(community_analyzer)
+            boxplot_btn.click(analyzer.create_boxplot, inputs=feature_selector, outputs=boxplot_output)
+            dist_btn.click(analyzer.create_distribution_plot, inputs=feature_selector, outputs=dist_output)
         
-        with gr.Tab("🔀 Combined Analysis"):
-            _create_combined_analysis_tab(structural_analyzer, community_analyzer)
+        with gr.Tab("🎯 Quality Assessment"):
+            quality_selector = gr.CheckboxGroup(
+                choices=analyzer.feature_cols,
+                label="Select Features to Assess",
+                value=analyzer.feature_cols[:10] if analyzer.feature_cols else []
+            )
+            quality_btn = gr.Button("Analyze Feature Quality")
+            quality_output = gr.Markdown()
+            quality_btn.click(analyzer.analyze_feature_quality, inputs=quality_selector, outputs=quality_output)
     
-    return demo
-
-
-def _create_analysis_tab(analyzer):
-    """Create analysis tab for a specific feature type"""
-    with gr.Tab("📈 Statistics"):
-        stats_btn = gr.Button(f"Get {analyzer.name} Statistics")
-        stats_output = gr.Dataframe()
-        stats_btn.click(analyzer.get_feature_stats, outputs=stats_output)
-    
-    with gr.Tab("📦 Distributions"):
-        feature_selector = gr.CheckboxGroup(
-            choices=analyzer.feature_cols,
-            label="Select Features (max 4)",
-            value=analyzer.feature_cols[:4] if analyzer.feature_cols else []
-        )
+    def _create_combined_analysis_tab(self):
+        """Create tab for comparing structural vs community features"""
+        gr.Markdown("## 🔀 Compare Structural vs Community Features")
         
         with gr.Row():
-            boxplot_btn = gr.Button("Generate Boxplots")
-            dist_btn = gr.Button("Generate Distribution Plots")
+            with gr.Column():
+                gr.Markdown("### Structural Features")
+                struct_selector = gr.CheckboxGroup(
+                    choices=self.structural_analyzer.feature_cols[:5] if self.structural_analyzer.feature_cols else [],
+                    label="Select Structural Features",
+                    value=self.structural_analyzer.feature_cols[:3] if self.structural_analyzer.feature_cols else []
+                )
+            
+            with gr.Column():
+                gr.Markdown("### Community Features") 
+                comm_selector = gr.CheckboxGroup(
+                    choices=self.community_analyzer.feature_cols[:5] if self.community_analyzer.feature_cols else [],
+                    label="Select Community Features",
+                    value=self.community_analyzer.feature_cols[:3] if self.community_analyzer.feature_cols else []
+                )
         
-        with gr.Row():
-            boxplot_output = gr.Plot()
-            dist_output = gr.Plot()
+        compare_btn = gr.Button("Compare Feature Quality")
+        compare_output = gr.Markdown()
         
-        boxplot_btn.click(analyzer.create_boxplot, inputs=feature_selector, outputs=boxplot_output)
-        dist_btn.click(analyzer.create_distribution_plot, inputs=feature_selector, outputs=dist_output)
+        compare_btn.click(self._compare_features, inputs=[struct_selector, comm_selector], outputs=compare_output)
     
-    with gr.Tab("🎯 Quality Assessment"):
-        quality_selector = gr.CheckboxGroup(
-            choices=analyzer.feature_cols,
-            label="Select Features to Assess",
-            value=analyzer.feature_cols[:10] if analyzer.feature_cols else []
-        )
-        quality_btn = gr.Button("Analyze Feature Quality")
-        quality_output = gr.Markdown()
-        quality_btn.click(analyzer.analyze_feature_quality, inputs=quality_selector, outputs=quality_output)
-
-
-def _create_combined_analysis_tab(analyzer1, analyzer2):
-    """Create tab for comparing structural vs community features"""
-    gr.Markdown("## 🔀 Compare Structural vs Community Features")
-    
-    with gr.Row():
-        with gr.Column():
-            gr.Markdown("### Structural Features")
-            struct_selector = gr.CheckboxGroup(
-                choices=analyzer1.feature_cols[:5] if analyzer1.feature_cols else [],
-                label="Select Structural Features",
-                value=analyzer1.feature_cols[:3] if analyzer1.feature_cols else []
-            )
-        
-        with gr.Column():
-            gr.Markdown("### Community Features") 
-            comm_selector = gr.CheckboxGroup(
-                choices=analyzer2.feature_cols[:5] if analyzer2.feature_cols else [],
-                label="Select Community Features",
-                value=analyzer2.feature_cols[:3] if analyzer2.feature_cols else []
-            )
-    
-    compare_btn = gr.Button("Compare Feature Quality")
-    compare_output = gr.Markdown()
-    
-    def compare_features(struct_features, comm_features):
+    def _compare_features(self, struct_features, comm_features):
+        """Compare features between structural and community analyzers"""
         result = f"## 📊 Feature Comparison\n\n"
         
         # Analyze structural features
         if struct_features:
-            struct_analysis = analyzer1.analyze_feature_quality(struct_features)
+            struct_analysis = self.structural_analyzer.analyze_feature_quality(struct_features)
             result += f"### 🏗️ Structural Features Analysis\n{struct_analysis}\n\n"
         
         # Analyze community features  
         if comm_features:
-            comm_analysis = analyzer2.analyze_feature_quality(comm_features)
+            comm_analysis = self.community_analyzer.analyze_feature_quality(comm_features)
             result += f"### 🏘️ Community Features Analysis\n{comm_analysis}\n\n"
         
         return result
-    
-    compare_btn.click(compare_features, inputs=[struct_selector, comm_selector], outputs=compare_output)
 
 
 if __name__ == "__main__":
@@ -332,5 +327,7 @@ if __name__ == "__main__":
     # Ensure output directory exists
     os.makedirs('/csv_output', exist_ok=True)
     
-    demo = create_gradio_app()
+    # Create and launch the app
+    app = GradioApp()
+    demo = app.create_gradio_app()
     demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
